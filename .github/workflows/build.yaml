@@ -1,10 +1,6 @@
 name: Build and Push Docker Image
 
 on:
-  push:
-    tags:
-      - "v*" # Only trigger for tags that start with "v" (you can adjust the pattern as needed)
-    # Exclude the release event trigger to avoid duplicate runs
   release:
     types: [published] # Only trigger the workflow on release publication, not on release creation
 
