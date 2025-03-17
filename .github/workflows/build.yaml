@@ -3,57 +3,62 @@ name: Build and Push Docker Image
 on:
   release:
     types: [published] # Only trigger the workflow on release publication, not on release creation
-
 env:
   ECR_REPO: 305587085711.dkr.ecr.us-west-2.amazonaws.com/open-manus
 
 jobs:
   build_image:
-    name: Build Docker Image
-    runs-on: ubuntu-latest
+    name: Build docker image
+    runs-on: ["ubuntu-latest"]
     steps:
-      - name: Checkout Repository
+      - name: Checkout Sources
         uses: actions/checkout@v4
 
-      - name: Log in to Amazon ECR
+      - name: Login to ECR
         uses: docker/login-action@v3
         with:
           registry: 305587085711.dkr.ecr.us-west-2.amazonaws.com
-          username: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          password: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-        with:
-          use: true
+          username: ${{ secrets.ECR_ACCESS_KEY_ID }}
+          password: ${{ secrets.ECR_ACCESS_KEY }}
 
       - name: Prepare environment variables
         run: |
-          echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "HOME=$HOME" | tee -a $GITHUB_ENV
+          echo "BUILDX_BUILDER=${{ steps.docker-builder.outputs.name }}" | tee -a $GITHUB_ENV
+          echo "BUILDX_BUILDER_CONTAINER=buildx_buildkit_${{ steps.docker-builder.outputs.name }}0" | tee -a $GITHUB_ENV
+          echo "SHORT_SHA=${GITHUB_SHA::7}" | tee -a $GITHUB_ENV
           GIT_TAG=$(git tag --points-at HEAD)
-          echo "GIT_TAG=$GIT_TAG" >> $GITHUB_ENV
-          echo "REF_NAME=$(echo ${GIT_TAG:-$GITHUB_REF_NAME} | sed 's/[^a-zA-Z0-9._]/-/g')" >> $GITHUB_ENV
-          echo "GIT_BRANCH=$(git branch --show-current)" >> $GITHUB_ENV
-          echo "BRANCH=${GIT_BRANCH:-'main'}" >> $GITHUB_ENV
+          echo "GIT_TAG=$GIT_TAG" | tee -a $GITHUB_ENV
+          GIT_BRANCH=$(git branch --show-current)
+          echo "GIT_BRANCH=$GIT_BRANCH" | tee -a $GITHUB_ENV
+          echo "REF_NAME=$(echo ${GIT_TAG:-$GITHUB_REF_NAME} | sed 's/[^a-zA-Z0-9._]/-/g')" | tee -a $GITHUB_ENV
 
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v4
         with:
-          images: ${{ env.ECR_REPO }}
+          images: |
+            ${{ env.ECR_REPO }}
           tags: |
+            type=ref,event=branch
+            type=ref,event=branch,suffix=-${{ github.run_number }}
             type=ref,event=tag
+            type=ref,event=pr
+            type=semver,pattern=v{{version}}
+            type=semver,pattern=v{{major}}.{{minor}}
             type=sha,format=short,prefix=
-            type=raw,value=${{ env.GIT_TAG }}
-            type=raw,value=latest,enable=${{ env.GIT_BRANCH == 'main' }}
-            type=raw,value=${{ env.GIT_BRANCH }}-latest,enable=${{ env.GIT_BRANCH != 'main' }}
+            type=raw,value=${{ env.REF_NAME }},enable=${{ github.event_name == 'pull_request' }}
+            type=raw,value=${{ env.GIT_BRANCH }},enable=${{ env.GIT_BRANCH != '' }}
+            type=raw,value=latest,enable=${{ env.GIT_BRANCH == 'alt-main' }}
 
-      - name: Build and Push Docker Image
+      - name: Build with cache and push images
         uses: docker/build-push-action@v3
+        id: docker_build
         with:
           context: .
           file: ./server/Dockerfile
-          push: true
+          builder: ${{ steps.docker-builder.outputs.name }}
+          push: ${{ github.event_name != 'pull_request' }}
+          cache-from: |
+            type=registry,ref=${{ env.ECR_REPO }}:latest
           tags: ${{ steps.meta.outputs.tags }}
-          build-args: |
-            SHORT_SHA=${{ env.SHORT_SHA }}
