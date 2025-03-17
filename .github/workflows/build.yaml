@@ -2,8 +2,6 @@ name: build
 on:
   push:
     tags: ["*"]
-    branches:
-      - alt-main
 
 env:
   ECR_REPO: 305587085711.dkr.ecr.us-west-2.amazonaws.com/open-manus
