@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*" # Only trigger for tags that start with "v" (you can adjust the pattern as needed)
+    # Exclude the release event trigger to avoid duplicate runs
+  release:
+    types: [published] # Only trigger the workflow on release publication, not on release creation
 
 env:
   ECR_REPO: 305587085711.dkr.ecr.us-west-2.amazonaws.com/open-manus
