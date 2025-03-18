@@ -1,64 +1,60 @@
-name: Build and Push Docker Image
+name: Build and Push Python Docker Image (GCP)
 
 on:
-  release:
-    types: [published] # Only trigger the workflow on release publication, not on release creation
+  push:
+    tags: ["*"]
+
 env:
-  ECR_REPO: 305587085711.dkr.ecr.us-west-2.amazonaws.com/open-manus
+  GAR_REPO: us-west1-docker.pkg.dev/shared-resources-alt/open-manus/open-manus
 
 jobs:
-  build_image:
-    name: Build docker image
-    runs-on: ["ubuntu-latest"]
+  build_and_push:
+    name: Build and Push Docker Image to GAR
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Sources
+      # Step 1: Checkout Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Login to ECR
-        uses: docker/login-action@v3
-        with:
-          registry: 305587085711.dkr.ecr.us-west-2.amazonaws.com
-          username: ${{ secrets.ECR_ACCESS_KEY_ID }}
-          password: ${{ secrets.ECR_ACCESS_KEY }}
-
-      - name: Prepare environment variables
+      # Step 2: Extract Tag
+      - name: Extract Tag
         run: |
-          echo "HOME=$HOME" | tee -a $GITHUB_ENV
-          echo "BUILDX_BUILDER=${{ steps.docker-builder.outputs.name }}" | tee -a $GITHUB_ENV
-          echo "BUILDX_BUILDER_CONTAINER=buildx_buildkit_${{ steps.docker-builder.outputs.name }}0" | tee -a $GITHUB_ENV
-          echo "SHORT_SHA=${GITHUB_SHA::7}" | tee -a $GITHUB_ENV
-          GIT_TAG=$(git tag --points-at HEAD)
-          echo "GIT_TAG=$GIT_TAG" | tee -a $GITHUB_ENV
-          GIT_BRANCH=$(git branch --show-current)
-          echo "GIT_BRANCH=$GIT_BRANCH" | tee -a $GITHUB_ENV
-          echo "REF_NAME=$(echo ${GIT_TAG:-$GITHUB_REF_NAME} | sed 's/[^a-zA-Z0-9._]/-/g')" | tee -a $GITHUB_ENV
+          tag=${GITHUB_REF#refs/*/}
+          echo "TAG=$tag" >> $GITHUB_ENV
 
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v4
+      # Step 3: Authenticate to Google Cloud
+      - id: "auth"
+        uses: "google-github-actions/auth@v2"
         with:
-          images: |
-            ${{ env.ECR_REPO }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=branch,suffix=-${{ github.run_number }}
-            type=ref,event=tag
-            type=ref,event=pr
-            type=semver,pattern=v{{version}}
-            type=semver,pattern=v{{major}}.{{minor}}
-            type=sha,format=short,prefix=
-            type=raw,value=${{ env.REF_NAME }},enable=${{ github.event_name == 'pull_request' }}
-            type=raw,value=${{ env.GIT_BRANCH }},enable=${{ env.GIT_BRANCH != '' }}
-            type=raw,value=latest,enable=${{ env.GIT_BRANCH == 'alt-main' }}
+          credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
 
-      - name: Build with cache and push images
-        uses: docker/build-push-action@v3
-        id: docker_build
+      # Step 4: Set up Cloud SDK
+      - name: "Set up Cloud SDK"
+        uses: "google-github-actions/setup-gcloud@v2"
+        with:
+          project_id: shared-resources-alt
+
+      # Step 5: Configure Docker for GAR
+      - name: Configure Docker for GAR
+        run: gcloud auth configure-docker us-west1-docker.pkg.dev
+
+      # Step 6: Extract Docker Metadata
+      - name: Extract Metadata (Tags, Labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GAR_REPO }}
+          tags: |
+            type=raw,value=${{ env.TAG }}
+            type=raw,value=latest
+
+      # Step 7: Build and Push Docker Image to GAR
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./server/Dockerfile
-          builder: ${{ steps.docker-builder.outputs.name }}
-          push: ${{ github.event_name != 'pull_request' }}
-          cache-from: |
-            type=registry,ref=${{ env.ECR_REPO }}:latest
-          tags: ${{ steps.meta.outputs.tags }}
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.GAR_REPO }}:${{ env.TAG }}
+            ${{ env.GAR_REPO }}:latest
